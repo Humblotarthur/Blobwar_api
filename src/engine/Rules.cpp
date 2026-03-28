@@ -14,6 +14,8 @@ bool Rules::isValidMove(const Board& b, const Move& m, Player p) {
 }
 
 void Rules::applyMove(Board& b, const Move& m, Player p) {
+    b.incMoveCount();
+
     if (chebyshev(m.x1, m.y1, m.x2, m.y2) == 2)
         b.set(m.x1, m.y1, Cell::Empty);   // saut : case d'origine libérée
 
@@ -54,6 +56,13 @@ GameStatus Rules::getStatus(const Board& b) {
     // Fin immédiate si un joueur n'a plus de billes
     if (s1 == 0) return GameStatus::P2Wins;
     if (s2 == 0) return GameStatus::P1Wins;
+
+    // Limite de 200 coups
+    if (b.moveCount() >= 200) {
+        if (s1 > s2) return GameStatus::P1Wins;
+        if (s2 > s1) return GameStatus::P2Wins;
+        return GameStatus::Draw;
+    }
 
     bool p1can = canMove(b, Player::P1);
     bool p2can = canMove(b, Player::P2);

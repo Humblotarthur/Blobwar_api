@@ -9,7 +9,7 @@
 
 enum class GameMode  { OneVsOne, Server, VsAI, Tournament };
 enum class AppScreen { Menu, BoardSelect, PlayerSelect, AISelect, Game, End };
-enum class BoardType { Standard8x8, Standard10x10, Cross9x9 };
+enum class BoardType { Classic8x8, Cross8x8, Standard10x10, Cross9x9 };
 
 class App {
 public:
@@ -58,7 +58,7 @@ private:
 
     AppScreen screen_    = AppScreen::Menu;
     GameMode  mode_      = GameMode::OneVsOne;
-    BoardType boardType_ = BoardType::Standard8x8;
+    BoardType boardType_ = BoardType::Classic8x8;
 
     // État de jeu
     Board              board_{8, 8};
@@ -70,6 +70,6 @@ private:
 
     // IA : nullptr = joueur humain
     std::unique_ptr<AIBase> ai_[2];              // ai_[0]=P1, ai_[1]=P2
-    std::string aiAlgo_[2]  = {"negamax", "negamax"};
+    std::string aiAlgo_[2]  = {"negamax_par_dyn", "negamax_par_dyn"};
     int         aiDepth_[2] = {4, 4};
 };

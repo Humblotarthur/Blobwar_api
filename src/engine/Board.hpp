@@ -29,13 +29,18 @@ public:
     int  height() const { return h_; }
 
     void setHole(int x, int y) { set(x, y, Cell::Hole); }
-    void setupDefault();   // P1 coin (0,0), P2 coin (w-1,h-1)
-    void setupCross();     // 9x9 croix : trous 2x2 aux angles
+    void setupDefault();    // 8x8 classique : coins seulement, sans trous
+    void setupCross8x8();   // 8x8 croix : coins + trous diamant centre
+    void setupCross();      // 9x9 croix : trous 2x2 aux angles
 
     int countPieces(Player p) const;
     int countEmpty()          const;
 
+    int  moveCount()    const { return moveCount_; }
+    void incMoveCount()       { ++moveCount_; }
+
 private:
     int w_, h_;
+    int moveCount_ = 0;
     std::vector<Cell> cells_;
 };

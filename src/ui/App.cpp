@@ -152,26 +152,30 @@ void App::onMenuClick(sf::Vector2i pos) {
 void App::renderBoardSelect() {
     auto ws = window_.getSize();
     float cx = ws.x / 2.f, cy = ws.y / 2.f;
-    drawText("Choisir un plateau", 32, sf::Color::White, {cx, cy - 130.f}, true);
-    drawButton({cx - 150.f, cy - 60.f},  {300.f, 55.f}, "8x8 - Standard");
-    drawButton({cx - 150.f, cy + 20.f},  {300.f, 55.f}, "10x10 - Standard");
-    drawButton({cx - 150.f, cy + 100.f}, {300.f, 55.f}, "9x9 - Croix");
-    drawButton({cx - 100.f, cy + 185.f}, {200.f, 40.f}, "Retour", {80, 50, 50});
+    drawText("Choisir un plateau", 32, sf::Color::White, {cx, cy - 160.f}, true);
+    drawButton({cx - 150.f, cy - 100.f}, {300.f, 55.f}, "8x8 - Classique");
+    drawButton({cx - 150.f, cy -  25.f}, {300.f, 55.f}, "8x8 - Croix");
+    drawButton({cx - 150.f, cy +  50.f}, {300.f, 55.f}, "10x10 - Standard");
+    drawButton({cx - 150.f, cy + 125.f}, {300.f, 55.f}, "9x9 - Croix");
+    drawButton({cx - 100.f, cy + 205.f}, {200.f, 40.f}, "Retour", {80, 50, 50});
 }
 
 void App::onBoardSelectClick(sf::Vector2i pos) {
     auto ws = window_.getSize();
     float cx = ws.x / 2.f, cy = ws.y / 2.f;
-    if (hit({cx - 150.f, cy - 60.f}, {300.f, 55.f}, pos)) {
-        boardType_ = BoardType::Standard8x8;
+    if (hit({cx - 150.f, cy - 100.f}, {300.f, 55.f}, pos)) {
+        boardType_ = BoardType::Classic8x8;
         board_ = Board(8, 8); board_.setupDefault(); startGame();
-    } else if (hit({cx - 150.f, cy + 20.f}, {300.f, 55.f}, pos)) {
+    } else if (hit({cx - 150.f, cy - 25.f}, {300.f, 55.f}, pos)) {
+        boardType_ = BoardType::Cross8x8;
+        board_ = Board(8, 8); board_.setupCross8x8(); startGame();
+    } else if (hit({cx - 150.f, cy + 50.f}, {300.f, 55.f}, pos)) {
         boardType_ = BoardType::Standard10x10;
         board_ = Board(10, 10); board_.setupDefault(); startGame();
-    } else if (hit({cx - 150.f, cy + 100.f}, {300.f, 55.f}, pos)) {
+    } else if (hit({cx - 150.f, cy + 125.f}, {300.f, 55.f}, pos)) {
         boardType_ = BoardType::Cross9x9;
         board_ = Board(9, 9); board_.setupCross(); startGame();
-    } else if (hit({cx - 100.f, cy + 185.f}, {200.f, 40.f}, pos)) {
+    } else if (hit({cx - 100.f, cy + 205.f}, {200.f, 40.f}, pos)) {
         screen_ = (mode_ == GameMode::VsAI) ? AppScreen::PlayerSelect
                                              : AppScreen::Menu;
     }
@@ -323,17 +327,16 @@ struct AlgoOption  { const char* algo; const char* label; };
 struct DepthOption { int depth; const char* label; };
 
 static const AlgoOption ALGO_OPTIONS[] = {
-    {"random",      "Aleatoire"},
-    {"ab",          "AlphaBeta"},
-    {"negamax",     "Negamax"},
-    {"negamax_par", "Negamax //"},
+    {"ab",              "AlphaBeta"},
+    {"negamax_par",     "Negamax //"},
+    {"negamax_par_dyn", "Negamax // Dyn"},
 };
 static const DepthOption DEPTH_OPTIONS[] = {
     {3, "d=3 (Facile)"},
     {4, "d=4 (Normal)"},
     {6, "d=6 (Difficile)"},
 };
-static constexpr int NB_ALGOS  = 4;
+static constexpr int NB_ALGOS  = 3;
 static constexpr int NB_DEPTHS = 3;
 
 static sf::Vector2f algoPos(sf::Vector2u ws, int col, int row, int nbCols) {
@@ -370,16 +373,12 @@ void App::renderAISelect() {
                        sel ? sf::Color{50,110,50} : sf::Color{80,80,80});
         }
 
-        // Profondeur (désactivée pour Random)
-        bool isRandom = (aiAlgo_[pidx] == "random");
-        drawText("Profondeur", 17, isRandom ? sf::Color{80,80,80} : sf::Color{140,140,140},
-                 {cx, ws.y * 0.54f}, true);
+        drawText("Profondeur", 17, sf::Color{140,140,140}, {cx, ws.y * 0.54f}, true);
         for (int i = 0; i < NB_DEPTHS; ++i) {
-            bool sel = (!isRandom && aiDepth_[pidx] == DEPTH_OPTIONS[i].depth);
-            sf::Color bg = isRandom ? sf::Color{50,50,50}
-                         : (sel    ? sf::Color{50,110,50} : sf::Color{80,80,80});
+            bool sel = (aiDepth_[pidx] == DEPTH_OPTIONS[i].depth);
             drawButton(depthPos(ws, col, i, nbCols), {240.f, 42.f},
-                       DEPTH_OPTIONS[i].label, bg);
+                       DEPTH_OPTIONS[i].label,
+                       sel ? sf::Color{50,110,50} : sf::Color{80,80,80});
         }
     }
 
@@ -397,10 +396,9 @@ void App::onAISelectClick(sf::Vector2i pos) {
         for (int i = 0; i < NB_ALGOS; ++i)
             if (hit(algoPos(ws, col, i, nbCols), {240.f, 46.f}, pos))
                 aiAlgo_[pidx] = ALGO_OPTIONS[i].algo;
-        if (aiAlgo_[pidx] != "random")
-            for (int i = 0; i < NB_DEPTHS; ++i)
-                if (hit(depthPos(ws, col, i, nbCols), {240.f, 42.f}, pos))
-                    aiDepth_[pidx] = DEPTH_OPTIONS[i].depth;
+        for (int i = 0; i < NB_DEPTHS; ++i)
+            if (hit(depthPos(ws, col, i, nbCols), {240.f, 42.f}, pos))
+                aiDepth_[pidx] = DEPTH_OPTIONS[i].depth;
     }
 
     if (hit({ws.x/2.f-120.f, ws.y*0.87f}, {240.f, 48.f}, pos))
@@ -416,9 +414,10 @@ void App::onEndClick(sf::Vector2i pos) {
     float cx = ws.x / 2.f, cy = ws.y / 2.f;
     if      (hit({cx - 125.f, cy + 10.f}, {250.f, 55.f}, pos)) {
         switch (boardType_) {
-            case BoardType::Standard10x10: board_ = Board(10,10); board_.setupDefault(); break;
-            case BoardType::Cross9x9:      board_ = Board(9, 9);  board_.setupCross();   break;
-            default:                       board_ = Board(8, 8);  board_.setupDefault(); break;
+            case BoardType::Cross8x8:      board_ = Board(8, 8);   board_.setupCross8x8(); break;
+            case BoardType::Standard10x10: board_ = Board(10, 10); board_.setupDefault();  break;
+            case BoardType::Cross9x9:      board_ = Board(9, 9);   board_.setupCross();    break;
+            default:                       board_ = Board(8, 8);   board_.setupDefault();  break;
         }
         startGame();
     } else if (hit({cx - 125.f, cy + 80.f}, {250.f, 55.f}, pos)) {
