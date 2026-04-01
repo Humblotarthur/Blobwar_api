@@ -1,0 +1,36 @@
+Task 2 — Advanced AI Testing API (Optimizer Rewrite)
+Completed: 2026-03-31
+
+## Objectif
+Réécrire l'optimizer pour trouver automatiquement les meilleurs paramètres de NegamaxParIncAIDynStud
+en le faisant jouer contre NegamaxYBWDynAI(250ms).
+
+## Stratégie implémentée
+
+### Phase 1 — Baseline vs YBW(250ms)
+- Grille exhaustive sur lmrMinDepth × lmrAlpha × lmrK × lmpPruneRatio
+- "Elagation rates" (lmrAlpha, lmpPruneRatio) testés à leur valeur divisée par 2
+- Arrêt dès winRate > 0.5 vs YBW, sinon retient la meilleure config
+- gamesPerEval parties par évaluation (alternance couleurs)
+
+### Phase 2 — Exponential backoff
+- Paramètres optimisés dans l'ordre : lmrMinDepth → lmrAlpha → lmrK → lmpPruneRatio (en dernier)
+- Unité de base : 0.01 pour doubles (lmrAlpha, lmpPruneRatio), 1 pour entiers (lmrMinDepth, lmrK)
+- Pour chaque param :
+  * Victoire vs précédent → doubler l'incrément, compter win consécutif
+  * Défaite → retour à la dernière victoire (bestCfg inchangé), reset incrément à l'unité de base
+  * Stable = 3 victoires consécutives → passer au param suivant
+- Vérification vs YBW(250ms) après chaque amélioration
+- Checkpoint sauvegardé après chaque évaluation (reprise possible)
+
+## Fichiers modifiés
+- REWRITTEN : optimizer/Optimizer.hpp (nouvelle interface : runPhase1/runPhase2, evalVsYBW/evalVsRef)
+- REWRITTEN : optimizer/Optimizer.cpp (logique Phase1+Phase2 backoff)
+- MODIFIED : optimizer/main.cpp (timeLimitMs défaut → 250ms, message d'accueil)
+
+## Interface CLI (inchangée)
+--state FILE    : checkpoint
+--games N       : parties/éval (défaut: 6)
+--depth D       : (ignoré, compat)
+--time T        : budget/coup ms (défaut: 250)
+--passes P      : max passes Phase 2 (défaut: 5)

@@ -5,7 +5,7 @@
 #include "AlphaBetaAI.hpp"
 #include "NegamaxAI.hpp"
 #include "NegamaxParallelAI.hpp"
-#include "NegamaxParDynAI.hpp"
+#include "NegamaxYBWAI.hpp"
 #include "NegamaxParIncAI.hpp"
 #include <iostream>
 #include <memory>
@@ -22,7 +22,7 @@ int main(int argc, char* argv[]) {
     if      (algo == "random")      ai = std::make_unique<RandomAI>();
     else if (algo == "ab")          ai = std::make_unique<AlphaBetaAI>(depth);
     else if (algo == "negamax_par") ai = std::make_unique<NegamaxParallelAI>(depth);
-    else if (algo == "negamax_par_dyn") ai = std::make_unique<NegamaxParDynAI>(depth);
+    else if (algo == "negamax_par_dyn") ai = std::make_unique<NegamaxYBWAI>(depth);
     else if (algo == "negamax_par_inc") ai = std::make_unique<NegamaxParIncAI>(depth);
     else                            ai = std::make_unique<NegamaxAI>(depth);
 

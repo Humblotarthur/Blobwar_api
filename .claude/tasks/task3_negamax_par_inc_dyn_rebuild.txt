@@ -1,0 +1,101 @@
+Task 3 — Rebuild NegamaxParIncAIDynStud depuis YBWsearchZobristDYN
+=================================================================
+
+## Contexte / Diagnostic
+
+NegamaxParIncAIDynStud (stud_zero) perd 0-10 contre ybw_dyn alors que
+YBWsearchZobristDYN (même structure de base) bat ybw_dyn 7-3.
+=> NegamaxParIncAIDynStud est cassé.
+
+NegamaxParIncAIDynStud est supposé être une copie propre de l'algo de référence
+(ybwz_dyn) sur laquelle on implémente LMR + PMR pour l'optimiser.
+
+## Objectif
+
+Repartir de YBWsearchZobristDYN comme base et implémenter LMR + PMR
+de manière propre, paramétrable et mathématiquement cohérente.
+
+Fichier cible : src/ai/NegamaxParInc/NegamaxParIncAIDynStud.hpp
+(réécriture complète à partir de YBWsearchZobristDYN)
+
+## Architecture des réductions
+
+### Tri des coups à la racine
+- Tri par eval statique (simple, comme ybwz_dyn)
+- Les coups sont ordonnés du meilleur au pire : move[0] = meilleur, move[n-1] = pire
+
+### PMR — Pruning Move Ratio (proportion fixe)
+- Les PMR_RATIO derniers coups (pourcentage de n) sont complètement élagués (non explorés)
+- Seuls les (1 - PMR_RATIO) * n premiers coups sont explorés
+- Paramètre : double PMR_RATIO = 0.2  (ex: 20% des pires coups ignorés)
+- S'applique uniquement si depth >= PMR_MIN_DEPTH
+- Paramètre : int PMR_MIN_DEPTH = 3
+
+### LMR — Late Move Reduction (proportion logarithmique, multi-classes)
+
+Principe : les coups sont divisés en K classes selon leur rang dans l'ordre.
+La classe 0 (meilleurs coups) est recherchée à pleine profondeur.
+Les classes suivantes sont recherchées à profondeur réduite.
+
+#### Calcul du nombre de classes K
+K = max(1, floor(log2(n_moves_explored)))
+Exemple : 8 coups → K=3, 16 coups → K=4, 4 coups → K=2
+
+#### Attribution des classes
+La classe i contient les coups de rang [start_i, end_i[ où :
+  start_i = n * (1 - 1/2^i)       (approximatif, arrondi)
+  end_i   = n * (1 - 1/2^(i+1))
+  classe 0 : 1er coup (always full depth, PV node)
+  classe 1 : coups 2..floor(n/2)
+  classe 2 : coups floor(n/2)+1..floor(3n/4)
+  etc.
+=> Chaque classe suivante contient environ moitié moins de coups.
+
+#### Réduction par classe
+  reduction(classe i) = i  (ou fonction paramétrable)
+  depth_searched = max(1, depth - 1 - reduction(i))
+
+Paramètre : une fonction f(i) -> R customisable, par défaut f(i) = i
+
+#### Re-search si coup réduit semble bon
+Si score_réduit > alpha (le coup semble meilleur que prévu) :
+  → relancer la recherche à pleine profondeur (depth-1) pour confirmer
+  → Ce re-search peut être contrôlé par un flag : bool LMR_RESEARCH = true
+
+### Parallélisme (YBW pattern)
+- Coup 0 toujours séquentiel (PV)
+- Coups 1..n-PMR en parallèle (TBB)
+- Chaque worker est une copie de *this (pattern existant)
+- La réduction s'applique à la copie worker (comme avant)
+
+## Paramètres configurables (NegamaxConfig)
+
+Ajouter dans NegamaxConfig :
+  double pmrRatio       = 0.2    # proportion coups élagués (PMR)
+  int    pmrMinDepth    = 3      # profondeur min pour activer PMR
+  bool   lmrEnabled     = true   # activer/désactiver LMR
+  int    lmrMinDepth    = 2      # profondeur min pour activer LMR
+  bool   lmrResearch    = true   # re-search à pleine profondeur si coup réduit bon
+  # La fonction de réduction f(i)=i est hardcodée mais facile à changer (une ligne)
+
+## Ce que l'implémentation NE doit PAS faire
+- Pas de sortDepth (sort parallèle par mini-search) → trop coûteux
+- Pas de killer heuristic dans cette version (peut être ajouté après)
+- Pas de prevBestMove dans cette version de base
+- Sort toujours par simple eval statique
+
+## Validation attendue
+Après implémentation :
+1. stud_zero (pmrRatio=0, lmrEnabled=false) doit battre ybw_dyn à ~70%+ sur 10 parties
+   (= même perf que ybwz_dyn)
+2. stud_dyn (avec PMR+LMR activés, paramètres défaut) doit battre stud_zero
+   (= les réductions améliorent réellement la recherche)
+
+## Fichiers à modifier
+- src/ai/NegamaxParInc/NegamaxParIncAIDynStud.hpp  (réécriture depuis ybwz_dyn)
+- src/ai/NegamaxParInc/NegamaxConfig.hpp            (ajouter pmrRatio, pmrMinDepth, lmrEnabled, lmrMinDepth, lmrResearch)
+
+## Fichiers de référence à lire
+- src/ai/NegamaxVariants/YBWsearchZobrist/YBWsearchZobristDYN.hpp  ← BASE à copier
+- src/ai/NegamaxParInc/NegamaxConfig.hpp                           ← à étendre
+- src/ai/NegamaxParInc/NegamaxParIncAIDynStud.hpp                  ← à remplacer

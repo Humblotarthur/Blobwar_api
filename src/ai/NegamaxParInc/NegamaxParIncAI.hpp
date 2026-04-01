@@ -1,14 +1,19 @@
 #pragma once
+// Variantes archivées : src/ai/NegamaxVariants/
 #include "AIBase.hpp"
 #include "IncMoveState.hpp"
+#include "NegamaxConfig.hpp"
 #include "../Eval/Zobrist.hpp"
+#include "../Eval/CNNEval.hpp"
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 #include <atomic>
 #include <vector>
 #include <numeric>
 #include <algorithm>
+#include <cmath>
 #include <string>
+#include <memory>
 
 // Globaux (définis dans le .cpp qui implémente l'init du plateau)
 extern uint64_t neighborMask[64];
@@ -18,10 +23,7 @@ extern uint64_t reachAll[64];
 // NegamaxParIncAI
 //
 // Negamax alpha-beta parallèle (YBW) avec état incrémental apply/undo.
-//
-// Représentation des coups :
-//   Plus de vecteurs moves_P1 / moves_P2.
-//   Les coups sont générés à la demande via forEachMove() sur moveTable[64].
+// Variante active : YBWsearchZobristPMR (parallèle + Zobrist TT + LMR + LMP).
 //
 // Zobrist :
 //   ztt_  : raw pointer partagé entre tous les workers (copie de *this).
@@ -62,6 +64,9 @@ public:
         state_    = IncMoveState::fromBoard(b);
         bestMove_ = Move{-1, -1, -1, -1};
 
+        if (cfg_.useCnnEval && !cnnEval_)
+            cnnEval_ = std::make_shared<CNNEval>();
+
         // // ── Init Zobrist ─────────────────────────────────────────────────────
         // // Alloué sur le heap (≈16 MB) — reset entre deux appels
         if (!ownsZtt_) {
@@ -88,336 +93,19 @@ private:
     uint64_t    hash_;     // hash courant — copié par valeur dans chaque worker
     bool        ownsZtt_;  // true uniquement pour l'instance racine
 
+    NegamaxConfig              cfg_;
+    std::shared_ptr<CNNEval>   cnnEval_; // null sauf si use_cnn_eval=true
+
+    inline int16_t leafEval(const BBState& s, Player p) const {
+        return s.evalFor(p);
+    }
+
     static constexpr int PARALLEL_THRESHOLD = 2;
 
     /*__________________________________________________________________________*/
 
-    // ── YBWsearch : parallèle au-dessus du seuil  ───────────────────────────
-
-    /*__________________________________________________________________________*/
-
-    inline int16_t YBWsearch(int depth, Player current,
-                              int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        std::vector<int> order(n);
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&](int a, int b_) {
-            BBState sa = state_.board, sb = state_.board;
-            sa.applyMove(moves[a],  current);
-            sb.applyMove(moves[b_], current);
-            return sa.evalFor(current) > sb.evalFor(current);
-        });
-
-        int16_t best;
-        {
-            int8_t blobMask = 0;
-            state_.applyMove(moves[order[0]], current, blobMask);
-            best = (depth - 1 <= PARALLEL_THRESHOLD)
-                 ? -search    (depth-1, opponent(current), -beta, -alpha)
-                 : -YBWsearch (depth-1, opponent(current), -beta, -alpha);
-            state_.removeMove(moves[order[0]], current, blobMask);
-        }
-
-        bestMove_ = moves[order[0]];
-        if (n == 1 || best >= beta) return best;
-        alpha = std::max(alpha, best);
-
-        std::atomic<int64_t> atomicBest  { pack(best, order[0]) };
-        std::atomic<int16_t> globalAlpha { alpha };
-
-        tbb::parallel_for(tbb::blocked_range<int>(1, n),
-            [&](const tbb::blocked_range<int>& r) {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    const int16_t curAlpha = globalAlpha.load(std::memory_order_acquire);
-                    if (curAlpha >= beta) break;
-
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;
-                    worker.state_.applyMove(moves[order[i]], current, blobMask);
-
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.search    (depth-1, opponent(current), -beta, -curAlpha)
-                        : -worker.YBWsearch (depth-1, opponent(current), -beta, -curAlpha);
-
-                    int64_t oldBest = atomicBest.load(std::memory_order_relaxed);
-                    while (score > score_of(oldBest)) {
-                        if (atomicBest.compare_exchange_weak(oldBest, pack(score, order[i]),
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                    int16_t oldAlpha = globalAlpha.load(std::memory_order_relaxed);
-                    while (score > oldAlpha) {
-                        if (globalAlpha.compare_exchange_weak(oldAlpha, score,
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                }
-            });
-
-        const int64_t finalBest = atomicBest.load(std::memory_order_acquire);
-        bestMove_ = moves[idx_of(finalBest)];
-        return score_of(finalBest);
-    }
-
-
-    /*__________________________________________________________________________*/
-
-    // ── YBWsearchnotri : parallèle sans tri ─────────────────────────────────
-
-    /*__________________________________________________________________________*/
-
-    inline int16_t YBWsearchnotri(int depth, Player current,
-                              int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        std::vector<int> order(n);
-        std::iota(order.begin(), order.end(), 0);
-
-        int16_t best;
-        {
-            int8_t blobMask = 0;
-            state_.applyMove(moves[order[0]], current, blobMask);
-            best = (depth-1 <= PARALLEL_THRESHOLD)
-                 ? -search    (depth-1, opponent(current), -beta, -alpha)
-                 : -YBWsearch (depth-1, opponent(current), -beta, -alpha);
-            state_.removeMove(moves[order[0]], current, blobMask);
-        }
-
-        bestMove_ = moves[order[0]];
-        if (n == 1 || best >= beta) return best;
-        alpha = std::max(alpha, best);
-
-        std::atomic<int64_t> atomicBest  { pack(best, order[0]) };
-        std::atomic<int16_t> globalAlpha { alpha };
-
-        tbb::parallel_for(tbb::blocked_range<int>(1, n),
-            [&](const tbb::blocked_range<int>& r) {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    const int16_t curAlpha = globalAlpha.load(std::memory_order_acquire);
-                    if (curAlpha >= beta) break;
-
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;
-                    worker.state_.applyMove(moves[order[i]], current, blobMask);
-
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.search    (depth-1, opponent(current), -beta, -curAlpha)
-                        : -worker.YBWsearch (depth-1, opponent(current), -beta, -curAlpha);
-
-                    int64_t oldBest = atomicBest.load(std::memory_order_relaxed);
-                    while (score > score_of(oldBest)) {
-                        if (atomicBest.compare_exchange_weak(oldBest, pack(score, order[i]),
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                    int16_t oldAlpha = globalAlpha.load(std::memory_order_relaxed);
-                    while (score > oldAlpha) {
-                        if (globalAlpha.compare_exchange_weak(oldAlpha, score,
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                }
-            });
-
-        const int64_t finalBest = atomicBest.load(std::memory_order_acquire);
-        bestMove_ = moves[idx_of(finalBest)];
-        return score_of(finalBest);
-    }
-
-
-    /*__________________________________________________________________________*/
-
-    // ── YBWsearchtrinoYBW ────────────────────────────────────────────────────
-
-    /*__________________________________________________________________________*/
-
-    inline int16_t YBWsearchtrinoYBW(int depth, Player current,
-                              int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        std::vector<int> order(n);
-        std::iota(order.begin(), order.end(), 0);
-
-        int best = -10000;
-        bestMove_ = moves[order[0]];
-        if (n == 1 || best >= beta) return best;
-
-        std::atomic<int64_t> atomicBest  { pack(best, order[0]) };
-        std::atomic<int16_t> globalAlpha { alpha };
-
-        tbb::parallel_for(tbb::blocked_range<int>(1, n),
-            [&](const tbb::blocked_range<int>& r) {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    const int16_t curAlpha = globalAlpha.load(std::memory_order_acquire);
-                    if (curAlpha >= beta) break;
-
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;
-                    worker.state_.applyMove(moves[order[i]], current, blobMask);
-
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.search    (depth-1, opponent(current), -beta, -curAlpha)
-                        : -worker.YBWsearch (depth-1, opponent(current), -beta, -curAlpha);
-
-                    int64_t oldBest = atomicBest.load(std::memory_order_relaxed);
-                    while (score > score_of(oldBest)) {
-                        if (atomicBest.compare_exchange_weak(oldBest, pack(score, order[i]),
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                    int16_t oldAlpha = globalAlpha.load(std::memory_order_relaxed);
-                    while (score > oldAlpha) {
-                        if (globalAlpha.compare_exchange_weak(oldAlpha, score,
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                }
-            });
-
-        const int64_t finalBest = atomicBest.load(std::memory_order_acquire);
-        bestMove_ = moves[idx_of(finalBest)];
-        return score_of(finalBest);
-    }
-
-
-    /*__________________________________________________________________________*/
-
-    // ── YBWsearchnoatomic ────────────────────────────────────────────────────
-
-    /*__________________________________________________________________________*/
-
-    struct Result { int16_t score; int index; };
-
-    inline int16_t YBWsearchnoatomic(int depth, Player current,
-                              int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        std::vector<int> order(n);
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&](int a, int b_) {
-            BBState sa = state_.board, sb = state_.board;
-            sa.applyMove(moves[a],  current);
-            sb.applyMove(moves[b_], current);
-            return sa.evalFor(current) > sb.evalFor(current);
-        });
-
-        int16_t best;
-        {
-            int8_t blobMask = 0;
-            state_.applyMove(moves[order[0]], current, blobMask);
-            best = (depth-1 <= PARALLEL_THRESHOLD)
-                 ? -search    (depth-1, opponent(current), -beta, -alpha)
-                 : -YBWsearch (depth-1, opponent(current), -beta, -alpha);
-            state_.removeMove(moves[order[0]], current, blobMask);
-        }
-
-        bestMove_ = moves[order[0]];
-        if (n == 1 || best >= beta) return best;
-        alpha = std::max(alpha, best);
-
-        Result result = tbb::parallel_reduce(
-            tbb::blocked_range<int>(1, n),
-            Result{ -10000, -1 },
-            [&](const tbb::blocked_range<int>& r, Result local) -> Result {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;
-                    const int moveIdx = order[i];
-                    worker.state_.applyMove(moves[moveIdx], current, blobMask);
-
-                    int16_t localAlpha = alpha;
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.search   (depth-1, opponent(current), -beta, -localAlpha)
-                        : -worker.YBWsearch(depth-1, opponent(current), -beta, -localAlpha);
-
-                    if (score > local.score) { local.score = score; local.index = moveIdx; }
-                }
-                return local;
-            },
-            [](Result a, Result b) -> Result { return (a.score > b.score) ? a : b; }
-        );
-
-        if (result.index >= 0) bestMove_ = moves[result.index];
-        else                   bestMove_ = Move{-1,-1,-1,-1};
-        return result.score;
-    }
-
-
-    /*__________________________________________________________________________*/
-
-    // ── Parallelsearch ───────────────────────────────────────────────────────
-
-    /*__________________________________________________________________________*/
-
-    inline int16_t Parallelsearch(int depth, Player current,
-                                  int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        Result result = tbb::parallel_reduce(
-            tbb::blocked_range<int>(0, n),
-            Result{ -10000, -1 },
-            [&](const tbb::blocked_range<int>& r, Result local) -> Result {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;
-                    worker.state_.applyMove(moves[i], current, blobMask);
-
-                    int16_t localAlpha = alpha;
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.search   (depth-1, opponent(current), -beta, -localAlpha)
-                        : -worker.YBWsearch(depth-1, opponent(current), -beta, -localAlpha);
-
-                    if (score > local.score) { local.score = score; local.index = i; }
-                }
-                return local;
-            },
-            [](Result a, Result b) -> Result { return (a.score > b.score) ? a : b; }
-        );
-
-        if (result.index >= 0) bestMove_ = moves[result.index];
-        else                   bestMove_ = Move{-1,-1,-1,-1};
-        return result.score;
-    }
-
-
-    /*__________________________________________________________________________*/
-
     // ── search : séquentiel, apply/undo en place, zéro copie ─────────────────
+    // Utilisé par YBWsearchZobristPMR pour le tri heuristique (sortDepth).
 
     /*__________________________________________________________________________*/
 
@@ -425,7 +113,7 @@ private:
                           int16_t alpha, int16_t beta)
     {
         if (state_.getStatus() != GameStatus::Ongoing || depth == 0)
-            return state_.evalFor(current);
+            return leafEval(state_.board, current);
 
         const int pi = (current == Player::P1) ? 0 : 1;
 
@@ -453,8 +141,8 @@ private:
     /*__________________________________________________________________________*/
 
     // ── searchZobrist : séquentiel avec table de transposition ───────────────
+    // Utilisé par YBWsearchZobristPMR pour les nœuds sous le seuil parallèle.
     //
-    // Variante de search() enrichie d'un probe/store TT.
     // Le hash est passé par paramètre et mis à jour incrémentalement :
     //   XOR après applyMove → nouveau hash pour la récursion
     //   Pas de undo hash nécessaire (chaque frame a son propre hash local).
@@ -484,7 +172,7 @@ private:
 
         // ── Cas de base ───────────────────────────────────────────────────────
         if (state_.getStatus() != GameStatus::Ongoing || depth == 0)
-            return state_.evalFor(current);
+            return leafEval(state_.board, current);
 
         if (!state_.hasAnyMove(pi)) {
             // Passe le tour : bascule uniquement le bit joueur
@@ -531,143 +219,6 @@ private:
 
     /*__________________________________________________________________________*/
 
-    // ── YBWsearchZobrist : parallèle avec table de transposition ────────────
-    //
-    // Variante de YBWsearch() avec probe/store TT.
-    //
-    // hash_ est un membre copié dans chaque worker (indépendant par thread).
-    // ztt_  est un raw pointer partagé → TT commune à tous les workers.
-    //        Les écritures concurrentes sont acceptées (last-write-wins).
-
-    /*__________________________________________________________________________*/
-
-    inline int16_t YBWsearchZobrist(int depth, Player current,
-                                    int16_t alpha, int16_t beta)
-    {
-        const int pi = (current == Player::P1) ? 0 : 1;
-        const int oi = 1 - pi;
-        const int w  = state_.board.w;
-
-        // Probe TT
-        {
-            const TTEntry* e = ztt_->probe(hash_);
-            if (e && e->depth >= depth) {
-                if (e->flag == TT_EXACT)                        return e->score;
-                if (e->flag == TT_LOWER && e->score > alpha)    alpha = e->score;
-                if (e->flag == TT_UPPER && e->score < beta)     beta  = e->score;
-                if (alpha >= beta)                               return e->score;
-            }
-        }
-
-        // Collecte des coups
-        std::vector<Move> moves;
-        moves.reserve(64);
-        state_.forEachMove(pi, [&](const Move& m) { moves.push_back(m); });
-        const int n = static_cast<int>(moves.size());
-
-        if (n == 0) { bestMove_ = Move{-1,-1,-1,-1}; return 0; }
-
-        // Tri heuristique
-        std::vector<int> order(n);
-        std::iota(order.begin(), order.end(), 0);
-        std::sort(order.begin(), order.end(), [&](int a, int b_) {
-            BBState sa = state_.board, sb = state_.board;
-            sa.applyMove(moves[a],  current);
-            sb.applyMove(moves[b_], current);
-            return sa.evalFor(current) > sb.evalFor(current);
-        });
-
-        // Premier coup séquentiel
-        const int16_t origAlpha = alpha;
-        int16_t best;
-        {
-            int8_t blobMask = 0;
-            const Move& m0  = moves[order[0]];
-            const int   dst = m0.y2 * w + m0.x2;
-
-            state_.applyMove(m0, current, blobMask);
-
-            // Hash incrémental pour le premier coup (XOR est son propre inverse)
-            const uint64_t savedHash = hash_;
-            hash_ = ztt_->applyHash(hash_, m0, blobMask, pi, oi, w, neighborMask[dst]);
-
-            best = (depth-1 <= PARALLEL_THRESHOLD)
-                 ? -search   (depth-1, opponent(current), -beta, -alpha)
-                 : -YBWsearchZobrist(depth-1, opponent(current), -beta, -alpha);
-
-            hash_ = savedHash; // restaure hash_ (XOR inverse ou sauvegarde)
-            state_.removeMove(m0, current, blobMask);
-        }
-
-        bestMove_ = moves[order[0]];
-        if (n == 1 || best >= beta) {
-            ztt_->store(hash_, best, static_cast<int8_t>(depth),
-                        (best >= beta) ? TT_LOWER : TT_EXACT);
-            return best;
-        }
-
-        alpha = std::max(alpha, best);
-
-        std::atomic<int64_t> atomicBest  { pack(best, order[0]) };
-        std::atomic<int16_t> globalAlpha { alpha };
-
-        //Coups restants en parallèle
-        // Chaque worker = copie de *this.
-        //   - state_ : copié (indépendant)
-        //   - hash_  : copié par valeur (indépendant par thread)
-        //   - ztt_   : pointeur copié (partagé → TT commune)
-        tbb::parallel_for(tbb::blocked_range<int>(1, n),
-            [&](const tbb::blocked_range<int>& r) {
-                for (int i = r.begin(); i != r.end(); ++i) {
-                    const int16_t curAlpha = globalAlpha.load(std::memory_order_acquire);
-                    if (curAlpha >= beta) break;
-
-                    int8_t blobMask = 0;
-                    NegamaxParIncAI worker = *this;   // copie complète
-
-                    const Move& mv  = moves[order[i]];
-                    const int   dst = mv.y2 * w + mv.x2;
-
-                    worker.state_.applyMove(mv, current, blobMask);
-                    // Mise à jour hash_ dans le worker (indépendant du parent)
-                    worker.hash_ = worker.ztt_->applyHash(
-                        worker.hash_, mv, blobMask, pi, oi, w, neighborMask[dst]);
-
-                    const int16_t score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -worker.searchZobrist   (depth-1, opponent(current),
-                                                   -beta, -curAlpha, worker.hash_)
-                        : -worker.YBWsearchZobrist(depth-1, opponent(current),
-                                                   -beta, -curAlpha);
-
-                    // Mise à jour atomique atomicBest
-                    int64_t oldBest = atomicBest.load(std::memory_order_relaxed);
-                    while (score > score_of(oldBest)) {
-                        if (atomicBest.compare_exchange_weak(oldBest, pack(score, order[i]),
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                    // Mise à jour atomique globalAlpha
-                    int16_t oldAlpha = globalAlpha.load(std::memory_order_relaxed);
-                    while (score > oldAlpha) {
-                        if (globalAlpha.compare_exchange_weak(oldAlpha, score,
-                                std::memory_order_release, std::memory_order_relaxed)) break;
-                    }
-                }
-            });
-
-        // Store TT et résultat final
-        const int64_t finalBest  = atomicBest.load(std::memory_order_acquire);
-        const int16_t finalScore = score_of(finalBest);
-        const uint8_t flag = (finalScore <= origAlpha) ? TT_UPPER
-                           : (finalScore >= beta)       ? TT_LOWER
-                                                        : TT_EXACT;
-        ztt_->store(hash_, finalScore, static_cast<int8_t>(depth), flag);
-
-        bestMove_ = moves[idx_of(finalBest)];
-        return finalScore;
-    }
- 
-    /*__________________________________________________________________________*/
- 
     // ── YBWsearchZobristPMR : parallèle avec TT, tri parallèle, LMR dynamique ──
     //
     // Réduction dynamique R(d, i) : chaque coup reçoit une réduction
@@ -831,7 +382,7 @@ private:
             hash_ = ztt_->applyHash(hash_, m0, blobMask, pi, oi, w, neighborMask[dst]);
  
             best = (depth-1 <= PARALLEL_THRESHOLD)
-                 ? -searchZobrist   (depth-1, opponent(current), -beta, -alpha, hash_)
+                 ? -search             (depth-1, opponent(current), -beta, -alpha)
                  : -YBWsearchZobristPMR(depth-1, opponent(current), -beta, -alpha);
  
             hash_ = savedHash;
@@ -878,10 +429,10 @@ private:
  
             // ── Recherche à profondeur réduite ────────────────────────────────
             int16_t score = (searchDepth - 1 <= PARALLEL_THRESHOLD)
-                ? -worker.searchZobrist   (searchDepth-1, opponent(current),
-                                           -beta, -curAlpha, worker.hash_)
+                ? -worker.search             (searchDepth-1, opponent(current),
+                                              -beta, -curAlpha)
                 : -worker.YBWsearchZobristPMR(searchDepth-1, opponent(current),
-                                           -beta, -curAlpha);
+                                              -beta, -curAlpha);
  
             // ── Re-search si le coup réduit semble bon ────────────────────────
             // Condition : réduction active ET score > alpha
@@ -900,11 +451,10 @@ private:
                         verif.hash_, mv, blobMask, pi, oi, w, neighborMask[dst]);
  
                     const int16_t nullScore = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -verif.searchZobrist   (depth-1, opponent(current),
-                                                  -(curAlpha+1), -curAlpha,
-                                                  verif.hash_)
+                        ? -verif.search             (depth-1, opponent(current),
+                                                     -(curAlpha+1), -curAlpha)
                         : -verif.YBWsearchZobristPMR(depth-1, opponent(current),
-                                                  -(curAlpha+1), -curAlpha);
+                                                     -(curAlpha+1), -curAlpha);
  
                     if (nullScore > curAlpha) {
                         // Étape 2 : full re-search (score exact)
@@ -914,10 +464,10 @@ private:
                             full.hash_, mv, blobMask, pi, oi, w, neighborMask[dst]);
  
                         score = (depth-1 <= PARALLEL_THRESHOLD)
-                            ? -full.searchZobrist   (depth-1, opponent(current),
-                                                     -beta, -curAlpha, full.hash_)
+                            ? -full.search             (depth-1, opponent(current),
+                                                        -beta, -curAlpha)
                             : -full.YBWsearchZobristPMR(depth-1, opponent(current),
-                                                     -beta, -curAlpha);
+                                                        -beta, -curAlpha);
                     } else {
                         score = nullScore;
                     }
@@ -930,10 +480,10 @@ private:
                         full.hash_, mv, blobMask, pi, oi, w, neighborMask[dst]);
  
                     score = (depth-1 <= PARALLEL_THRESHOLD)
-                        ? -full.searchZobrist   (depth-1, opponent(current),
-                                                 -beta, -curAlpha, full.hash_)
+                        ? -full.search             (depth-1, opponent(current),
+                                                    -beta, -curAlpha)
                         : -full.YBWsearchZobristPMR(depth-1, opponent(current),
-                                                 -beta, -curAlpha);
+                                                    -beta, -curAlpha);
                 }
             }
  

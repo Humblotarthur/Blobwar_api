@@ -66,6 +66,7 @@ target_include_directories(blobwar_engine PUBLIC src/engine)
 # --- Évaluation partagée ---
 add_library(blobwar_eval STATIC
     src/ai/Eval/Eval.cpp
+    src/ai/Eval/CNNEval.cpp
 )
 target_include_directories(blobwar_eval PUBLIC src/ai/Eval)
 target_link_libraries(blobwar_eval PUBLIC blobwar_engine)
@@ -76,7 +77,7 @@ add_library(blobwar_ai STATIC
     src/ai/AlphaBeta/AlphaBetaAI.cpp
     src/ai/Negamax/NegamaxAI.cpp
     src/ai/NegamaxParallel/NegamaxParallelAI.cpp
-    src/ai/NegamaxParDyn/NegamaxParDynAI.cpp
+    src/ai/NegamaxYBW/NegamaxYBWAI.cpp
     src/ai/NegamaxParInc/NegamaxParIncAI.cpp
     src/ai/AIProcess.cpp
 )
@@ -88,7 +89,7 @@ target_include_directories(blobwar_ai PUBLIC
     src/ai/AlphaBeta
     src/ai/Negamax
     src/ai/NegamaxParallel
-    src/ai/NegamaxParDyn
+    src/ai/NegamaxYBW
     src/ai/NegamaxParInc
 )
 target_link_libraries(blobwar_ai PUBLIC blobwar_eval TBB::tbb)
@@ -118,8 +119,13 @@ target_link_libraries(ai_stub PRIVATE blobwar_ai)
 
 # --- Benchmark des IA ---
 add_executable(bench bench/main.cpp bench/BenchAPI.cpp)
-target_include_directories(bench PRIVATE bench)
+target_include_directories(bench PRIVATE bench src/ai/NegamaxVariants/YBWsearchZobrist src/ai/NegamaxParInc src/ai/NegamaxVariants/YBWsearchZobrist)
 target_link_libraries(bench PRIVATE blobwar_ai)
+
+# --- Optimiseur de paramètres NegamaxParIncAIStud ---
+add_executable(optimizer optimizer/main.cpp optimizer/Optimizer.cpp)
+target_include_directories(optimizer PRIVATE optimizer src/ai/NegamaxParInc)
+target_link_libraries(optimizer PRIVATE blobwar_ai)
 
 # ==============================================================================
 # RÉCAPITULATIF AU MOMENT DU CONFIGURE
