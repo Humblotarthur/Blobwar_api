@@ -10,6 +10,7 @@
 #include "NegamaxParIncAIDynStud.hpp"
 #include "NegamaxParIncAIDynStudPMR.hpp"
 #include "NegamaxParIncAIDynStudPMR_LMR2.hpp"
+#include "NegamaxParIncAIDynStudRandom.hpp"
 #include "NegamaxYBWDynAI.hpp"
 #include <chrono>
 #include <stdexcept>
@@ -85,6 +86,15 @@ std::unique_ptr<AIBase> makeAI(const PlayerConfig& cfg) {
         c.pmrRatio    = 0.0;
         c.lmrEnabled  = false;
         return std::make_unique<NegamaxParIncAIDynStud_PMR_LMR2>(c);
+    }
+    // stud_random : NegamaxParIncAIDynStud epsilon-greedy (entraînement CNN)
+    //   epsilon = cfg.randomEpsilon (defaut 0.1, configurable dans negamax_config.ini)
+    if (cfg.algo == "stud_random") {
+        NegamaxConfig c;
+        try { c = NegamaxConfig::loadFromFile("../negamax_config.ini"); }
+        catch (...) {}
+        c.timeLimitMs = cfg.depth;
+        return std::make_unique<NegamaxParIncAIDynStudRandom>(c);
     }
     // dyn_zero : NegamaxParIncAIDynStud avec PMR=0, LMR désactivé
     if (cfg.algo == "dyn_zero") {

@@ -56,11 +56,16 @@ struct IncMoveState {
     inline GameStatus getStatus()         const;
     inline bool       hasAnyMove(int pi)  const;
 
-    // ── Itération des coups (lazy, pour Negamax) ─────────────────────────── 
+    // ── Itération des coups (lazy, DIS — Delete Identical Search) ───────────
+    // Clone moves dédupliqués : une seule destination D par itération globale.
+    // Jump moves tous émis (source disparaît → états distincts).
     // Callback : void(const Move&)
-    // Retourne false depuis le callback pour court-circuiter (cutoff)
     template<typename Fn>
     inline void forEachMove(int pi, Fn&& fn) const;
+
+    // ── Ancienne version sans déduplication (conservée pour référence) ───────
+    // template<typename Fn>
+    // inline void forEachMoveDIS(int pi, Fn&& fn) const;
 };
 
 // ── fromBoard ────────────────────────────────────────────────────────────────
@@ -222,21 +227,40 @@ inline bool IncMoveState::hasAnyMove(int pi) const {
     return false;
 }
 
-// ── forEachMove ──────────────────────────────────────────────────────────────
-// Itère tous les coups du joueur pi.
-// Fn = void(const Move&) — utiliser un flag cutoff externe pour alpha-beta.
+// ── forEachMove (DIS — Delete Identical Search) ──────────────────────────────
+// Clone moves dédupliqués : visited est partagé entre tous les blobs.
+// Si blob A et blob B peuvent tous deux cloner vers D, seul le premier émet le coup.
+// Jump moves (distance 2) tous émis : la source disparaît → états distincts.
 
 template<typename Fn>
 inline void IncMoveState::forEachMove(int pi, Fn&& fn) const {
-    const int w    = board.w;
+    const int w     = board.w;
     uint64_t pieces = board.bb[pi];
+    uint64_t visited = 0;   // destinations de clone déjà émises
+
     while (pieces) {
         const int src = __builtin_ctzll(pieces);
         pieces &= pieces - 1;
-        uint64_t dsts = moveTable[src];
-        while (dsts) {
-            const int dst = __builtin_ctzll(dsts);
-            dsts &= dsts - 1;
+
+        const uint64_t allMoves = moveTable[src];
+
+        // Coups clone (distance 1) — dédupliqués via visited
+        uint64_t cloneDsts = allMoves & neighborMask[src] & ~visited;
+        visited |= cloneDsts;
+        while (cloneDsts) {
+            const int dst = __builtin_ctzll(cloneDsts);
+            cloneDsts &= cloneDsts - 1;
+            fn(Move{
+                (int8_t)(src % w), (int8_t)(src / w),
+                (int8_t)(dst % w), (int8_t)(dst / w)
+            });
+        }
+
+        // Coups saut (distance 2) — tous émis
+        uint64_t jumpDsts = allMoves & ~neighborMask[src];
+        while (jumpDsts) {
+            const int dst = __builtin_ctzll(jumpDsts);
+            jumpDsts &= jumpDsts - 1;
             fn(Move{
                 (int8_t)(src % w), (int8_t)(src / w),
                 (int8_t)(dst % w), (int8_t)(dst / w)
@@ -244,6 +268,26 @@ inline void IncMoveState::forEachMove(int pi, Fn&& fn) const {
         }
     }
 }
+
+// ── Ancienne forEachMove sans déduplication (référence) ──────────────────────
+// template<typename Fn>
+// inline void IncMoveState::forEachMoveNoDIS(int pi, Fn&& fn) const {
+//     const int w    = board.w;
+//     uint64_t pieces = board.bb[pi];
+//     while (pieces) {
+//         const int src = __builtin_ctzll(pieces);
+//         pieces &= pieces - 1;
+//         uint64_t dsts = moveTable[src];
+//         while (dsts) {
+//             const int dst = __builtin_ctzll(dsts);
+//             dsts &= dsts - 1;
+//             fn(Move{
+//                 (int8_t)(src % w), (int8_t)(src / w),
+//                 (int8_t)(dst % w), (int8_t)(dst / w)
+//             });
+//         }
+//     }
+// }
 
 // ── getStatus ────────────────────────────────────────────────────────────────
 

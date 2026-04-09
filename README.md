@@ -38,8 +38,8 @@ src/
     AlphaBeta/          Alpha-Beta classique
     Negamax/            Negamax alpha-beta séquentiel
     NegamaxParallel/    Negamax parallèle TBB (root-parallel)
-    NegamaxParDyn/      Negamax parallèle + élagage dynamique inter-threads (YBW + globalAlpha atomique)
-    NegamaxParInc/      Negamax parallèle + état incrémental (moves et score sans rescan)
+    NegamaxYBW/         YBW + globalAlpha atomique (élagage dynamique inter-threads)
+    NegamaxParInc/      YBW + état incrémental + Zobrist TT + PMR/LMR + iterative deepening
 
 ai_stub/                Binaire IA séparé, communique via stdin/stdout
 bench/                  Outil de benchmark (BenchAPI + exécutable)
@@ -103,65 +103,67 @@ make bench       # outil de benchmark
 
 L'outil `bench` lance des parties entre deux IA, mesure le temps de réflexion par coup et produit un rapport par **tranche de 10 coups**.
 
-Les résultats sont écrits dans **`log/output.txt`** (append, jamais dans le terminal).
+Les résultats sont écrits dans **`log/output.txt`** (append, jamais dans le terminal).  
+Voir `bench/README.md` pour la documentation complète.
 
 ### Usage
 
 ```bash
-./bench <algo1> <depth1> <algo2> <depth2> [board] [num_games]
+./bench <algo1> [-d] <val1> <algo2> [-d] <val2> [board] [num_games]
+./bench -h   # aide complète
 ```
 
-| Paramètre   | Valeurs possibles                                                      | Défaut     |
-|-------------|------------------------------------------------------------------------|------------|
-| `algo`      | `ab` \| `negamax` \| `negamax_par` \| `negamax_par_dyn` \| `negamax_par_inc` | —      |
-| `depth`     | entier (ex. 4, 6)                                                      | —          |
-| `board`     | `classic8` \| `cross8` \| `standard10` \| `cross9`                    | `classic8` |
-| `num_games` | entier                                                                 | `1`        |
+**`-d`** : le paramètre suivant est un **temps limite en ms** (modèles dynamiques avec iterative deepening).  
+Sans `-d` : le paramètre est une **profondeur fixe**.
+
+### Modèles disponibles
+
+**Profondeur fixe :**
+
+| Nom | Description |
+|-----|-------------|
+| `ab` | Alpha-Beta classique |
+| `negamax` | Negamax séquentiel |
+| `negamax_par` | Negamax parallèle YBW |
+| `negamax_par_dyn` | YBW + élagage dynamique |
+| `negamax_par_inc` | YBW + état incrémental |
+| `ybwz` | YBW + Zobrist hashing |
+| `stud` | Parametrique (negamax_config.ini) |
+
+**Dynamiques — utiliser avec `-d <ms>` :**
+
+| Nom | Description |
+|-----|-------------|
+| `ybwz_dyn` | YBW + Zobrist + iterative deepening **(référence)** |
+| `ybw_dyn` | YBW + iterative deepening |
+| `stud_dyn` | Parametrique + iterative deepening |
+| `stud_zero` | stud_dyn sans élagage (baseline) |
+| `pmr_dyn` | PMR activé (ratio=0.2) |
+| `pmr_zero` | PMR désactivé (baseline) |
+| `lmr2_zero` | LMR v2 désactivé (baseline) |
+| `dyn_zero` | Sans PMR/LMR (baseline pure) |
 
 ### Exemples
 
 ```bash
-# 1 partie : negamax_par_dyn vs negamax_par_inc, plateau classique 8×8
-./bench negamax_par_dyn 4 negamax_par_inc 4
+# Deux modèles dynamiques (250ms chacun)
+./bench ybwz_dyn -d 250 ybwz_dyn -d 250
 
-# 1 partie : AlphaBeta vs Negamax parallèle, plateau cross 8×8
-./bench ab 4 negamax_par 4 cross8
+# Dynamique vs profondeur fixe
+./bench ybwz_dyn -d 250 ab 5
 
-# 5 parties : negamax vs negamax_par_dyn, profondeur 6, plateau 10×10
-./bench negamax 6 negamax_par_dyn 6 standard10 5
+# Comparaison PMR vs référence, 5 parties
+./bench pmr_dyn -d 250 ybwz_dyn -d 250 classic8 5
 
-# Comparer l'incrémental vs le dynamique sur 3 parties
-./bench negamax_par_inc 5 negamax_par_dyn 5 classic8 3
+# Modèles classiques
+./bench ab 5 negamax_par 5 cross8 3
 ```
 
 ### Lire les résultats
 
 ```bash
-cat log/output.txt
-```
-
-Exemple de sortie :
-```
-Plateau    : classic8
-P1         : NegamaxParDyn(d=4)
-P2         : NegamaxParInc(d=4)
-Parties    : 1
-
-=== Résultat : NegamaxParDyn(d=4) (P1) ===
-  Coups joués : 34
-
-Tranche   Nb P1   Moy P1 (ms)   Nb P2   Moy P2 (ms)   Moy tout (ms)
---------------------------------------------------------------------
-0-9       5       312.45        5       287.12        299.78
-10-19     5       489.33        5       401.67        445.50
-20-29     4       601.20        5       512.88        552.56
-30-39     3       445.10        2       389.40        423.08
-======================================================================
-```
-
-Pour repartir de zéro :
-```bash
-rm log/output.txt
+cat log/output.txt   # résultats
+rm  log/output.txt   # repartir à zéro
 ```
 
 ---

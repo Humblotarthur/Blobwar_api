@@ -1,0 +1,6 @@
+.claude/
+build/
+lib/
+log/
+*.ini
+*.log

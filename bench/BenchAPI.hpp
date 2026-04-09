@@ -36,8 +36,9 @@ struct GameResult {
 // ── Configuration d'un joueur ─────────────────────────────────────────────────
 
 struct PlayerConfig {
-    std::string algo;   // "ab" | "negamax" | "negamax_par" | "negamax_par_dyn" | "negamax_par_inc"
-    int         depth;
+    std::string algo;
+    int         depth     = 0;
+    bool        isDynamic = false;  // true → depth est un temps limite en ms
 };
 
 std::unique_ptr<AIBase> makeAI(const PlayerConfig& cfg);

@@ -33,6 +33,9 @@ struct NegamaxConfig {
     bool   lmrEnabled  = true;  // enable LMR
     bool   lmrResearch = true;  // re-search at full depth if reduced score > alpha
 
+    // Random mix (pour entraînement — epsilon-greedy)
+    double randomEpsilon = 0.1; // prob. de jouer un coup aléatoire (0 = désactivé)
+
     // Charge depuis un fichier key=value.
     // Ignore les lignes vides et les commentaires (#).
     // Lève std::runtime_error si le fichier ne peut pas être ouvert.
@@ -71,6 +74,7 @@ struct NegamaxConfig {
             else if (key == "pmr_min_depth")            cfg.pmrMinDepth             = std::stoi(val);
             else if (key == "lmr_enabled")              cfg.lmrEnabled              = parseBool(val);
             else if (key == "lmr_research")             cfg.lmrResearch             = parseBool(val);
+            else if (key == "random_epsilon")           cfg.randomEpsilon           = std::stod(val);
         }
         return cfg;
     }
@@ -94,7 +98,8 @@ struct NegamaxConfig {
           << "pmr_ratio                  = " << pmrRatio                << "\n"
           << "pmr_min_depth              = " << pmrMinDepth             << "\n"
           << "lmr_enabled                = " << (lmrEnabled ? "true" : "false") << "\n"
-          << "lmr_research               = " << (lmrResearch ? "true" : "false") << "\n";
+          << "lmr_research               = " << (lmrResearch ? "true" : "false") << "\n"
+          << "random_epsilon             = " << randomEpsilon               << "\n";
     }
 
 private:

@@ -119,7 +119,7 @@ target_link_libraries(ai_stub PRIVATE blobwar_ai)
 
 # --- Benchmark des IA ---
 add_executable(bench bench/main.cpp bench/BenchAPI.cpp)
-target_include_directories(bench PRIVATE bench src/ai/NegamaxVariants/YBWsearchZobrist src/ai/NegamaxParInc src/ai/NegamaxVariants/YBWsearchZobrist)
+target_include_directories(bench PRIVATE bench src/ai/NegamaxVariants/YBWsearchZobrist src/ai/NegamaxParInc)
 target_link_libraries(bench PRIVATE blobwar_ai)
 
 # --- Optimiseur de paramètres NegamaxParIncAIStud ---
