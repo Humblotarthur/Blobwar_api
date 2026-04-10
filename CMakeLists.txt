@@ -5,8 +5,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ==============================================================================
+# Build type par défaut
+# ==============================================================================
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
+
+# ==============================================================================
 # OPTIONS CONFIGURABLES
-# Passer via : cmake -D<OPTION>=ON/OFF ..
 # ==============================================================================
 
 option(BLOBWAR_STATIC_SFML
@@ -17,26 +25,26 @@ option(BLOBWAR_STATIC_SFML
 #
 #  Priorité :
 #   1. -DSFML_DIR=<chemin>          → override total (chemin arbitraire)
-#   2. lib/SFML/ détecté dans le dépôt → utilisé automatiquement
+#   2. lib/SFML/ détecté dans le dépôt → utilisé automatiquement (statique)
 #   3. Défaut                        → CMake cherche dans les chemins système
-#
-#  Dans tous les cas, -DBLOBWAR_STATIC_SFML=ON force l'édition statique.
 # ==============================================================================
 
 set(_LOCAL_SFML_CMAKE "${CMAKE_SOURCE_DIR}/lib/SFML/lib/cmake/SFML")
 
 if(SFML_DIR)
-    # Chemin fourni explicitement — on ne touche à rien
     message(STATUS "[Blobwar] SFML_DIR fourni manuellement : ${SFML_DIR}")
+    set(_BLOBWAR_SFML_SOURCE "manuel")
 
 elseif(EXISTS "${_LOCAL_SFML_CMAKE}")
-    # lib/SFML/ présent dans le dépôt → priorité sur le système
     set(SFML_DIR "${_LOCAL_SFML_CMAKE}")
-    set(BLOBWAR_STATIC_SFML ON)   # local = statique par défaut
-    message(STATUS "[Blobwar] SFML local détecté et utilisé : ${SFML_DIR}")
+    set(BLOBWAR_STATIC_SFML ON)
+    set(_BLOBWAR_SFML_SOURCE "lib/SFML (local, statique)")
+    message(STATUS "[Blobwar] SFML local détecté : ${SFML_DIR}")
 
 else()
+    set(_BLOBWAR_SFML_SOURCE "système")
     message(STATUS "[Blobwar] lib/SFML/ absent — recherche dans les chemins système")
+    message(STATUS "[Blobwar] Si SFML est introuvable, lancez : bash setupenv.sh")
 endif()
 
 if(BLOBWAR_STATIC_SFML)
@@ -50,6 +58,14 @@ find_package(SFML 3 REQUIRED COMPONENTS Graphics Window System)
 # ==============================================================================
 
 find_package(TBB REQUIRED)
+
+if(NOT TBB_FOUND)
+    message(FATAL_ERROR
+        "[Blobwar] TBB introuvable.\n"
+        "  Linux  : sudo apt install libtbb-dev\n"
+        "  macOS  : brew install tbb\n"
+        "  Ou lancez : bash setupenv.sh")
+endif()
 
 # ==============================================================================
 # CIBLES
@@ -122,6 +138,17 @@ add_executable(bench bench/main.cpp bench/BenchAPI.cpp)
 target_include_directories(bench PRIVATE bench src/ai/NegamaxVariants/YBWsearchZobrist src/ai/NegamaxParInc)
 target_link_libraries(bench PRIVATE blobwar_ai)
 
+# --- Générateur de datasets d'entraînement CNN ---
+add_executable(data_gen data_gen/main.cpp)
+target_include_directories(data_gen PRIVATE
+    src/ai/NegamaxVariants/YBWsearchZobrist
+    src/ai/NegamaxParInc
+    src/ai
+    src/engine
+    src/ai/Eval
+)
+target_link_libraries(data_gen PRIVATE blobwar_ai)
+
 # --- Optimiseur de paramètres NegamaxParIncAIStud ---
 add_executable(optimizer optimizer/main.cpp optimizer/Optimizer.cpp)
 target_include_directories(optimizer PRIVATE optimizer src/ai/NegamaxParInc)
@@ -132,9 +159,9 @@ target_link_libraries(optimizer PRIVATE blobwar_ai)
 # ==============================================================================
 message(STATUS "----------------------------------------------------")
 message(STATUS "  Blobwar — configuration résumée")
-message(STATUS "  SFML_DIR           : ${SFML_DIR}")
+message(STATUS "  SFML source        : ${_BLOBWAR_SFML_SOURCE}")
 message(STATUS "  SFML statique      : ${SFML_STATIC_LIBRARIES}")
-message(STATUS "  BLOBWAR_SFML_LOCAL : ${BLOBWAR_SFML_LOCAL}")
-message(STATUS "  Compilateur        : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "  SFML_DIR           : ${SFML_DIR}")
 message(STATUS "  Build type         : ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Compilateur        : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "----------------------------------------------------")

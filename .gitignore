@@ -1,6 +1,30 @@
+# Claude internal
 .claude/
+
+# Build
 build/
-lib/
+
+# SFML compilé (platform-spécifique, reconstruit par setupenv.sh)
+lib/SFML/
+lib/SFML-build/
+# lib/SFML-src/ est conservé (sources, clonées par setupenv.sh)
+
+# Logs et résultats
 log/
-*.ini
 *.log
+
+# Config runtime locale
+*.ini
+
+# Datasets CNN (binaires volumineux)
+*.bin
+
+# Variables d'environnement locales
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+training/*.pt
+cnn_weights.bin

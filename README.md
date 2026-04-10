@@ -34,7 +34,12 @@ src/
   ai/
     AIBase              Interface abstraite (chooseMove / name)
     AIProcess           Pilote ai_stub via stdin/stdout
-    Eval/               Fonction d'évaluation partagée (matériel + position)
+    Eval/               Fonction d'évaluation partagée
+      Eval              Heuristique classique (matériel + position)
+      CNNEval           Forward pass CNN (3→16→32→FC64→1, tanh×64)
+      CNNTrainer        Backprop + Adam (entraînement CNN en C++)
+      GameRecord        TrainSample / TrainBatch (collecte données)
+      Zobrist           Table de transposition (~16 MB)
     AlphaBeta/          Alpha-Beta classique
     Negamax/            Negamax alpha-beta séquentiel
     NegamaxParallel/    Negamax parallèle TBB (root-parallel)
@@ -43,6 +48,8 @@ src/
 
 ai_stub/                Binaire IA séparé, communique via stdin/stdout
 bench/                  Outil de benchmark (BenchAPI + exécutable)
+data_gen/               Générateur de datasets CNN (bootstrap + self-play)
+training/               Pipeline d'entraînement Python (voir training/README.md)
 log/                    Fichiers de résultats générés par le benchmark
 ```
 
@@ -165,6 +172,38 @@ Sans `-d` : le paramètre est une **profondeur fixe**.
 cat log/output.txt   # résultats
 rm  log/output.txt   # repartir à zéro
 ```
+
+---
+
+## Entraînement CNN
+
+Le réseau de neurones évalue les positions pour guider la recherche.  
+Voir **`training/README.md`** pour la documentation complète.
+
+### Générer les datasets (depuis `build/`)
+
+```bash
+# Bootstrap supervisé (deux profondeurs)
+./data_gen bootstrap_shallow --games 10000 --depth 4 --out dataset_bootstrap_d4.bin
+./data_gen bootstrap_deep    --games 5000  --depth 6 --out dataset_bootstrap_d6.bin
+
+# Self-play (après un premier entraînement)
+./data_gen selfplay --games 2000 --time-ms 200 --out dataset_selfplay.bin
+
+# Tout d'un coup avec les valeurs par défaut
+./data_gen --all
+```
+
+### Entraîner et exporter
+
+```bash
+cd training
+# Éditer DATA_FILES / EPOCHS / LR en haut de train.py
+python train.py
+python export_weights.py --model model.pt --output ../build/cnn_weights.bin
+```
+
+`cnn_weights.bin` placé dans le répertoire de travail est chargé automatiquement par `CNNEval`.
 
 ---
 
